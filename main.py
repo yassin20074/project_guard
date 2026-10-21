@@ -91,13 +91,16 @@ async def check_recitation(
         raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured on the server.")
 
     try:
-        # تعريف العميل بدون أي بارامترات معقدة لتجنب مشاكل الـ proxies
+        # تهيئة عميل Groq بالشكل المتوافق مع الإصدارات المستقرة
         client = Groq(api_key=api_key)
         
         audio_bytes = await audio_file.read()
+        
+        # التأكد من اسم وامتداد الملف (حتى لو كان OGG)
+        filename = audio_file.filename if audio_file.filename else "audio.ogg"
 
         transcription = client.audio.transcriptions.create(
-            file=(audio_file.filename, audio_bytes),
+            file=(filename, audio_bytes),
             model="whisper-large-v3-turbo",
             language="ar",
             response_format="json",
@@ -115,4 +118,6 @@ async def check_recitation(
         }
 
     except Exception as e:
+        # طباعة الخطأ الكامل في الـ Logs لتسهيل التتبع
+        print(f"Detailed Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing audio: {str(e)}")
