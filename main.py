@@ -11,7 +11,6 @@ app = FastAPI(
     version="1.0.0"
 )
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,23 +19,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 def normalize_arabic(text: str) -> str:
-    
     text = re.sub(r'[\u0617-\u061A\u064B-\u0652]', '', text)
-   
     text = re.sub(r'[^\w\s]', '', text)
-    
     text = re.sub(r'[إأآا]', 'ا', text)
-    
     text = re.sub(r'ى', 'ي', text)
-    
     text = re.sub(r'ة\b', 'ه', text)
-     
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-# دالة مقارنة نص الطالب بالنص الأصلي للحديث
 def compare_texts(reference: str, recited: str):
     ref_norm = normalize_arabic(reference)
     rec_norm = normalize_arabic(recited)
@@ -57,17 +48,14 @@ def compare_texts(reference: str, recited: str):
             for w in ref_words[i1:i2]:
                 word_by_word_analysis.append({"word": w, "status": "correct"})
         elif tag == 'delete':
-            # كلمات في الحديث الأصلي الطالب نسي يقولها
             for w in ref_words[i1:i2]:
                 missing_words.append(w)
                 word_by_word_analysis.append({"word": w, "status": "missing"})
         elif tag == 'insert':
-            # كلمات زيادة قالها الطالب مش في الحديث
             for w in rec_words[j1:j2]:
                 extra_words.append(w)
                 word_by_word_analysis.append({"word": w, "status": "extra"})
         elif tag == 'replace':
-            # كلمات الطالب نطقها غلط أو بدلها بكلمات تانية
             expected_chunk = " ".join(ref_words[i1:i2])
             spoken_chunk = " ".join(rec_words[j1:j2])
             replaced_words.append({
@@ -82,7 +70,7 @@ def compare_texts(reference: str, recited: str):
 
     return {
         "similarity_percentage": similarity_ratio,
-        "is_passed": similarity_ratio >= 85.0,    
+        "is_passed": similarity_ratio >= 85.0,
         "missing_words": missing_words,
         "replaced_words": replaced_words,
         "extra_words": extra_words,
@@ -96,16 +84,18 @@ def home():
 @app.post("/api/v1/recitation/check")
 async def check_recitation(
     original_hadith: str = Form(..., description="النص الأصلي للحديث للمقارنة"),
-    audio_file: UploadFile = File(..., description="ملف الصوت المسجل من الطالب (mp3, wav, m4a, etc.)")
+    audio_file: UploadFile = File(..., description="ملف الصوت المسجل من الطالب")
 ):
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured on the server.")
 
     try:
+        # تعريف العميل بدون أي بارامترات معقدة لتجنب مشاكل الـ proxies
         client = Groq(api_key=api_key)
-        audio_bytes = await audio_file.read()
         
+        audio_bytes = await audio_file.read()
+
         transcription = client.audio.transcriptions.create(
             file=(audio_file.filename, audio_bytes),
             model="whisper-large-v3-turbo",
@@ -115,8 +105,6 @@ async def check_recitation(
         )
 
         student_text = transcription.text.strip()
-        
-           
         comparison_result = compare_texts(original_hadith, student_text)
 
         return {
