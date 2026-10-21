@@ -1,9 +1,9 @@
 import os
 import re
 import difflib
+import httpx
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from groq import Groq
 
 app = FastAPI(
     title="Smart Hadith Platform - AI Engine",
@@ -91,23 +91,36 @@ async def check_recitation(
         raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured on the server.")
 
     try:
-        # تهيئة عميل Groq بالشكل المتوافق مع الإصدارات المستقرة
-        client = Groq(api_key=api_key)
-        
         audio_bytes = await audio_file.read()
-        
-        # التأكد من اسم وامتداد الملف (حتى لو كان OGG)
         filename = audio_file.filename if audio_file.filename else "audio.ogg"
+        content_type = audio_file.content_type if audio_file.content_type else "audio/ogg"
 
-        transcription = client.audio.transcriptions.create(
-            file=(filename, audio_bytes),
-            model="whisper-large-v3-turbo",
-            language="ar",
-            response_format="json",
-            temperature=0.0
-        )
+        # إرسال الطلب مباشرة لـ Groq REST API بدون الاعتماد على مكتبة groq
+        url = "https://api.groq.com/openai/v1/audio/transcriptions"
+        headers = {
+            "Authorization": f"Bearer {api_key}"
+        }
+        files = {
+            "file": (filename, audio_bytes, content_type)
+        }
+        data = {
+            "model": "whisper-large-v3-turbo",
+            "language": "ar",
+            "response_format": "json",
+            "temperature": "0.0"
+        }
 
-        student_text = transcription.text.strip()
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(url, headers=headers, files=files, data=data)
+            if response.status_code != 200:
+            raise HTTPException(
+                status_code=response.status_code, 
+                detail=f"Groq API Error: {response.text}"
+            )
+
+        result_json = response.json()
+        student_text = result_json.get("text", "").strip()
+        
         comparison_result = compare_texts(original_hadith, student_text)
 
         return {
@@ -117,7 +130,7 @@ async def check_recitation(
             "evaluation": comparison_result
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        # طباعة الخطأ الكامل في الـ Logs لتسهيل التتبع
-        print(f"Detailed Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing audio: {str(e)}")
