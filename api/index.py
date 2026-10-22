@@ -1,11 +1,18 @@
 import os
 import re
+import json
 import difflib
 import httpx
+from typing import Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
-app = FastAPI()
+app = FastAPI(
+    title="Smart Hadith Platform - AI Engine",
+    description="APIs خاصة بمنصة الحديث الذكية - Phase 1 (التسميع) & Phase 2 (البطاقات التعليمية)",
+    version="2.0.0"
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,6 +22,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ==========================================
+# نماذج البيانات (Pydantic Models) - Phase 2
+# ==========================================
+class FlashcardRequest(BaseModel):
+    hadith_text: str = Field(..., description="النص الأصلي للحديث النبوي")
+    explanation: str = Field(..., description="الشرح المعتمد والموثوق للحديث ومعاني الكلمات")
+    narrator: Optional[str] = Field("", description="اسم راوي الحديث ونبذة عنه (إن وجد)")
+    num_cards: int = Field(5, description="عدد الفلاش كاردز المطلوب توليدها (الافتراضي 5)", ge=1, le=15)
+
+
+# ==========================================
+# دوال مساعدة - Phase 1 (التسميع الذكي)
+# ==========================================
 def normalize_arabic(text: str) -> str:
     text = re.sub(r'[\u0617-\u061A\u064B-\u0652]', '', text)
     text = re.sub(r'[^\w\s]', '', text)
@@ -73,11 +93,24 @@ def compare_texts(reference: str, recited: str):
         "detailed_analysis": word_by_word_analysis
     }
 
+
+# ==========================================
+# الـ Endpoints
+# ==========================================
 @app.get("/")
 def home():
-    return {"status": "online", "message": "Smart Hadith AI API is running (Phase 1 Ready)"}
+    return {
+        "status": "online",
+        "message": "Smart Hadith AI API is running (Phase 1 & Phase 2 Ready)",
+        "endpoints": [
+            "/api/v1/recitation/check",
+            "/api/v1/flashcards/generate"
+        ]
+    }
 
-@app.post("/api/v1/recitation/check")
+
+# --- Phase 1: نظام التسميع الذكي ---
+@app.post("/api/v1/recitation/check", tags=["Phase 1: Recitation"])
 async def check_recitation(
     original_hadith: str = Form(..., description="النص الأصلي للحديث للمقارنة"),
     audio_file: UploadFile = File(..., description="ملف الصوت المسجل من الطالب")
@@ -92,12 +125,8 @@ async def check_recitation(
         content_type = audio_file.content_type if audio_file.content_type else "audio/ogg"
 
         url = "https://api.groq.com/openai/v1/audio/transcriptions"
-        headers = {
-            "Authorization": f"Bearer {api_key}"
-        }
-        files = {
-            "file": (filename, audio_bytes, content_type)
-        }
+        headers = {"Authorization": f"Bearer {api_key}"}
+        files = {"file": (filename, audio_bytes, content_type)}
         data = {
             "model": "whisper-large-v3-turbo",
             "language": "ar",
@@ -110,14 +139,14 @@ async def check_recitation(
 
         if response.status_code != 200:
             raise HTTPException(
-                status_code=response.status_code, 
+                status_code=response.status_code,
                 detail=f"Groq API Error: {response.text}"
             )
 
         result_json = response.json()
         student_text = result_json.get("text", "").strip()
-        
         comparison_result = compare_texts(original_hadith, student_text)
+
         return {
             "success": True,
             "original_hadith": original_hadith,
@@ -129,3 +158,78 @@ async def check_recitation(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing audio: {str(e)}")
+
+
+# --- Phase 2: توليد البطاقات التعليمية (Flashcards) ---
+@app.post("/api/v1/flashcards/generate", tags=["Phase 2: Flashcards"])
+async def generate_flashcards(request: FlashcardRequest):
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured on the server.")
+
+    system_prompt = """أنت خبير تربوي متخصص في علوم الحديث النبوي الشريف وتصميم البطاقات التعليمية (Flashcards) لنظام التكرار المتباعد (Spaced Repetition).
+مهمتك هي توليد بطاقات تعليمية دقيقة باللغة العربية الفصحى بالاعتماد حصرياً على (نص الحديث، والراوي، والشرح المعتمد) المرفقين لك.
+ممنوع منعاً باتاً اختلاق أي معلومات أو معاني غير موجودة في النص المرفق.
+
+يجب أن تتنوع البطاقات بين الأنواع الثلاثة التالية:
+1. "fill_in_the_blank": بطاقات إكمال الفراغ (لاختبار استرجاع كلمات الحديث المفتاحية بوضع نقاط مكان الكلمة في وجه البطاقة، والكلمة الصحيحة في ظهر البطاقة).
+2. "vocabulary_and_narrator": بطاقات الرواة والمعاني (للربط بين الكلمة ومعناها من الشرح، أو السؤال عن راوي الحديث).
+3. "benefits_and_context": بطاقات الفوائد والفهم (سؤال مباشر حول فائدة أو معنى مستنبط من الشرح المرفق).
+
+يجب أن يكون إخراجك بصيغة JSON فقط ويحتوي على المفتاح "flashcards" وبداخله قائمة من الكائنات (Objects)، كل كائن يحتوي على:
+- "id": رقم البطاقة (1, 2, ...).
+- "type": نوع البطاقة ("fill_in_the_blank" أو "vocabulary_and_narrator" أو "benefits_and_context").
+- "type_ar": نوع البطاقة بالعربية ("إكمال الفراغ" أو "الرواة والمعاني" أو "الفوائد والفهم").
+- "front": وجه البطاقة (السؤال أو العبارة التي بها فراغ).
+- "back": ظهر البطاقة (الإجابة الدقيقة والمختصرة من النص المعتمد).
+- "hint": تلميح بسيط لمساعدة الطالب على التذكر دون كشف الإجابة الكاملة.
+"""
+
+    user_prompt = f"""قم بتوليد عدد ({request.num_cards}) بطاقات تعليمية (Flashcards) من المحتوى الموثوق التالي:
+
+- نص الحديث: {request.hadith_text}
+- راوي الحديث: {request.narrator if request.narrator else "غير محدد"}
+- الشرح والمعاني المعتمدة: {request.explanation}
+
+أخرج النتيجة بصيغة JSON فقط مطابقة للهيكل المطلوب."""
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.2
+        }
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(url, headers=headers, json=payload)
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Groq LLM Error: {response.text}"
+            )
+
+        result_data = response.json()
+        content_str = result_data["choices"][0]["message"]["content"]
+        parsed_json = json.loads(content_str)
+        flashcards_list = parsed_json.get("flashcards", [])
+
+        return {
+            "success": True,
+            "hadith_text": request.hadith_text,
+            "total_generated": len(flashcards_list),
+            "flashcards": flashcards_list
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating flashcards: {str(e)}")
