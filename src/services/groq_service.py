@@ -41,7 +41,7 @@ async def generate_llm_json(system_prompt: str, user_prompt: str, temperature: f
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-20b",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
